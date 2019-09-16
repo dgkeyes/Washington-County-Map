@@ -7,7 +7,6 @@ library(janitor)
 library(tidyverse)
 library(sf)
 library(tigris)
-library(hrbrthemes)
 library(scales)
 
 
@@ -65,11 +64,6 @@ washington_county_census_tracts <- tracts(state = "OR",
 
 
 
-# Theme -------------------------------------------------------------------
-
-theme_set(theme_ipsum(grid_col = "transparent",
-                      base_family = "Inter"))
-
 # Race/Ethnicity for Children Under 5 -------------------------------------
 
 race_ethnicity_under_5 <- get_acs(geography = "tract",
@@ -111,40 +105,6 @@ children_under_5 <- left_join(under_5_by_census_tract,
   right_join(washington_county_census_tracts) %>% 
   st_as_sf()
 
-dk_make_static_map <- function(df, title, caption, upper_limit, step) {
-  
-  ggplot(df) +
-    geom_sf(aes(fill = pct),
-            color = "transparent") +
-    scale_fill_viridis_c(option = "D",
-                         label = percent_format(1),
-                         limits = c(0, upper_limit),
-                         breaks = seq(0, .15, by = step)) +
-    labs(fill = NULL,
-         title = title,
-         caption = caption) +
-    theme(axis.text.x = element_blank(),
-          axis.text.y = element_blank(),
-          plot.title = element_text(hjust = 0.5))
-  
-}
-
-
-dk_make_static_map(children_under_5, "Children Under 15", "ACS 2017", .15, .05)
-
-
-ggplot(children_under_5) +
-  geom_sf(aes(fill = pct),
-          color = "transparent") +
-  scale_fill_viridis_c(option = "D",
-                       label = percent_format(1),
-                       limits = c(0, .15),
-                       breaks = c(0, .05, .1, .15)) +
-  labs(fill = NULL,
-       title = "Children Under 5") +
-  theme(axis.text.x = element_blank(),
-        axis.text.y = element_blank(),
-        plot.title = element_text(hjust = 0.5))
   
 
 # Total Count of Children 5-17 --------------------------------------------
