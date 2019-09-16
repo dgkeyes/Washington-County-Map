@@ -1,0 +1,12 @@
+name: washington-county-early-learning-hub-map
+title: washington-county-early-learning-hub-map
+username:
+account: davidgkeyes
+server: shinyapps.io
+hostUrl: https://api.shinyapps.io/v1
+appId: 1089298
+bundleId: 2323429
+url: https://davidgkeyes.shinyapps.io/washington-county-early-learning-hub-map/
+when: 1565897748.90797
+asMultiple: FALSE
+asStatic: FALSE
