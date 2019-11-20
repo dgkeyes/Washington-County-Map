@@ -1,0 +1,435 @@
+---
+title: "October Data Request"
+date: "`r Sys.Date()`"
+output:
+  distill::distill_article:
+    toc: true
+    toc_depth: 2
+    style: style.css
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = FALSE,
+                      warning = FALSE,
+                      message = FALSE,
+                      error = FALSE,
+                      cache = TRUE,
+                      fig.height = 6)
+```
+
+```{r}
+library(tidyverse)
+library(dkmisc)
+library(tidycensus)
+library(janitor)
+library(scales)
+library(sf)
+library(DT)
+library(tigris)
+library(leaflet)
+```
+
+
+```{r}
+# https://caowash.org/file_download/dc7830d5-b7f2-4d7d-9aab-a9c36d2924d1
+```
+
+
+
+# Families with children under 5 - 100% FPL and 200% FPL
+
+```{r}
+poverty_variables <- load_variables(2017, "acs5", cache = TRUE) %>% 
+  filter(str_detect(name, "B17024")) %>% 
+  filter(str_detect(label, "Under 6 years")) %>% 
+  filter(name != "B17024_002") %>% 
+  select(-concept)
+
+dk_get_100_200_poverty_data <- function(variable) {
+  
+  get_acs(state = "OR",
+          county = "Washington",
+          geography = "tract",
+          summary_var = "B17024_002",
+          variables = variable) 
+}
+
+children_in_poverty <- map_df(poverty_variables$name, dk_get_100_200_poverty_data) %>% 
+  clean_names() %>% 
+  set_names(c("geoid",
+              "census_tract",
+              "variable",
+              "children_under_6_in_poverty_n",
+              "children_under_6_in_poverty_moe",
+              "total_children_under_6",
+              "total_children_under_moe")) %>% 
+  left_join(poverty_variables, by = c("variable" = "name"))
+
+total_children_under_6 <- children_in_poverty %>% 
+  select(geoid, total_children_under_6) %>% 
+  distinct(geoid, .keep_all = TRUE)
+
+children_in_poverty <- children_in_poverty %>% 
+  mutate(poverty_level = case_when(
+    variable %in% c("B17024_003", "	B17024_004", "B17024_005") ~ "Up to 100% FPL",
+    variable %in% c("B17024_006", "	B17024_007", "B17024_008", "B17024_009", "B17024_010") ~ "Between 100% and 200% FPL",
+    TRUE ~ "At 200% FPL or Above"
+  )) %>% 
+  group_by(geoid, poverty_level) %>% 
+  summarize(children_under_6_in_poverty_n = sum(children_under_6_in_poverty_n)) %>% 
+  left_join(total_children_under_6, by = "geoid") %>% 
+  mutate(children_under_6_in_poverty_pct = children_under_6_in_poverty_n / total_children_under_6) %>% 
+  filter(poverty_level != "At 200% FPL or Above") %>% 
+  mutate(children_under_6_in_poverty_pct = percent(children_under_6_in_poverty_pct, 0.1))
+
+
+children_in_poverty %>% 
+  pivot_wider(geoid,
+              names_from = poverty_level,
+              values_from = children_under_6_in_poverty_pct) %>% 
+  set_names(c("Census Tract", "Percent of Children Under 6 up to 100% FPL", "Percent of Children Under 6 Between 100% and 200% FPL")) %>% 
+  write_csv("children-in-poverty.csv")
+```
+
+
+I can get poverty data at the 100% and 200% levels on kids 6 and under, but not under 5. See table [B17024 from the ACS](https://censusreporter.org/tables/B17024/), which is where people seem to get the 100% + 200% FPL data from (see, for example, the source on the [Kids Count website](https://datacenter.kidscount.org/data/tables/47-children-below-200-percent-poverty?loc=39&loct=2#detailed/2/39/false/37,871,870,573,869,36,868,867,133,38/any/329,330)). There is data on under 5 (see [here](https://censusreporter.org/tables/B17001/)) but it is dichotomous (i.e. someone is counted as in poverty or not).
+
+
+
+```{r, layout="l-page"}
+
+children_in_poverty %>% 
+  pivot_wider(geoid,
+              names_from = poverty_level,
+              values_from = children_under_6_in_poverty_pct) %>% 
+  set_names(c("Census Tract", "Percent of Children Under 6 up to 100% FPL", "Percent of Children Under 6 Between 100% and 200% FPL")) %>% 
+  datatable()
+
+```
+
+
+
+
+
+# Single Parent Households with children under 5 and Under 200% FPL
+
+I'm not sure this data is available. There is data for family type and for poverty levels, but not the two together.
+
+I'm showing 
+
+```{r}
+single_parent_variables <- load_variables(2017, "acs5", cache = TRUE) %>% 
+  filter(str_detect(name, "B23008")) %>% 
+  filter(str_detect(label, "Under 6 years")) %>% 
+  filter(name != "B23008_002")
+
+dk_get_single_parent_data <- function(variable) {
+  
+  get_acs(state = "OR",
+          county = "Washington",
+          geography = "tract",
+          summary_var = "B23008_002",
+          variables = variable) 
+}
+
+single_parent_data <- map_df(single_parent_variables$name, dk_get_single_parent_data) %>% 
+  clean_names() %>% 
+  left_join(single_parent_variables, by = c("variable" = "name")) %>% 
+  mutate(family_type = case_when(
+    str_detect(label, "two parents") ~ "Two parents",
+    TRUE ~ "Single parent"
+  )) %>% 
+  group_by(geoid, family_type) %>% 
+  summarize(n = sum(estimate),
+            total = sum(summary_est)) %>% 
+  filter(family_type == "Single parent") %>% 
+  mutate(single_parent_pct = n / total) %>% 
+  select(geoid, n, total, single_parent_pct)
+
+single_parent_data %>% 
+  mutate(single_parent_pct = percent(single_parent_pct, 0.1)) %>% 
+  set_names(c("Census Tract", 
+              "Number of Children Under 6 in Single Parent Homes", 
+              "Total Number of Children Under 6",
+              "Percent of Children Under 6 in Single Parent Homes")) %>% 
+  write_csv("single-parent-homes.csv")
+
+```
+
+```{r, layout="l-page"}
+single_parent_data %>% 
+  mutate(single_parent_pct = percent(single_parent_pct, 0.1)) %>% 
+  set_names(c("Census Tract", 
+              "Number of Children Under 6 in Single Parent Homes", 
+              "Total Number of Children Under 6",
+              "Percent of Children Under 6 in Single Parent Homes")) %>% 
+  datatable()
+```
+
+
+
+# Specific Racial and Ethnic Groups under 200% FPL
+
+Here is the note from the email:
+
+> I know there may be limitations on the data for some of the groups below. Currently the only categories where we would want to look at the Hispanic ethnic category would be Latino & Two or More races. I think if we get into Hispanic – Black, Hispanic- White it gets complicated really quickly. Open to suggestion on these listings if we need to have a discussion.)
+
+I've showed this below using various racial groups for all children under 6. 
+
+```{r}
+poverty_by_race_variables <- load_variables(2017, "acs5", cache = TRUE) %>% 
+  filter(str_detect(name, "B17020")) %>% 
+  filter(str_detect(label, "Under 6 years")) 
+
+
+dk_get_poverty_data_by_race <- function(variable) {
+  
+  get_acs(state = "OR",
+          county = "Washington",
+          geography = "tract",
+          variables = variable) 
+}
+
+children_in_poverty_by_race <- map_df(poverty_by_race_variables$name, dk_get_poverty_data_by_race) %>% 
+  clean_names() %>% 
+  left_join(poverty_by_race_variables, by = c("variable" = "name")) %>% 
+  separate(concept, into = c("concept", "race"), sep = "\\(") %>% 
+  mutate(concept = str_trim(concept)) %>%
+  mutate(race = str_remove(race, "\\)")) %>% 
+  mutate(race = str_to_title(race)) %>% 
+  mutate(poverty = case_when(
+    str_detect(label, "above") ~ "At or Above",
+    TRUE ~ "Below"
+  )) %>% 
+  group_by(geoid, variable, race, poverty) %>% 
+  summarize(n = sum(estimate)) %>% 
+  ungroup() %>% 
+  # replace_na(list(race = "Total")) %>%
+  drop_na(race) %>%
+  group_by(geoid, poverty, race) %>% 
+  summarize(n = sum(n)) %>% 
+  pivot_wider(id_cols = c(geoid, race),
+              names_from = poverty,
+              values_from = n) %>% 
+  clean_names() %>% 
+  mutate(total = at_or_above + below) %>% 
+  mutate(pct_below_poverty_level = below / total)
+
+children_in_poverty_by_race %>% 
+  mutate(pct_below_poverty_level_formatted = percent(pct_below_poverty_level, 0.1)) %>% 
+  select(geoid, race, pct_below_poverty_level_formatted) %>% 
+  pivot_wider(id_cols = geoid,
+              names_from = race,
+              values_from = pct_below_poverty_level_formatted) %>% 
+  rename("Census Tract" = "geoid") %>% 
+  write_csv("poverty-by-race.csv")
+```
+
+```{r, layout="l-page"}
+children_in_poverty_by_race %>% 
+  mutate(pct_below_poverty_level_formatted = percent(pct_below_poverty_level, 0.1)) %>% 
+  select(geoid, race, pct_below_poverty_level_formatted) %>% 
+  pivot_wider(id_cols = geoid,
+              names_from = race,
+              values_from = pct_below_poverty_level_formatted) %>% 
+  rename("Census Tract" = "geoid") %>% 
+  datatable()
+```
+
+
+# Geospatial Data
+
+## Maps
+
+```{r}
+# Created using http://colorbrewer2.org/#type=qualitative&scheme=Accent&n=3
+
+color_school_catchment_areas <- "#7fc97f"
+color_census_tracts <- "#beaed4"
+color_zctas <- "#fdc086"
+```
+
+
+Note from email:
+
+> Also, it would be helpful if you could look into which census tracts fit into related zip codes, elementary catchments and school districts. I think we are going to have to deal with overlapping boundaries as we move into mapping, so getting that data now would be helpful. 
+
+### School Catchment Areas
+
+I downloaded data from [here](https://spatialdata.oregonexplorer.info/geoportal/details;id=1270fe6e833f4d0eabacc71300069738) to get school catchment area data.
+
+```{r results = "hide"}
+wash_co_school_catchment_areas <- st_read("SchoolYear_2015_2016.gdb",
+                                          layer = "EDUCATIONAL_BOUNDARIES") %>% 
+  clean_names() %>% 
+  filter(county_name_alt == "Washington") %>% 
+  st_transform(crs = 4326)
+```
+
+Hover on the map to see the associated school.
+
+```{r, layout="l-page"}
+leaflet() %>%
+  addProviderTiles(providers$CartoDB.Positron) %>%
+  addPolygons(data = wash_co_school_catchment_areas,
+              label = wash_co_school_catchment_areas$grade_1_name_1,
+              fillColor = color_school_catchment_areas,
+              color = color_school_catchment_areas,
+              weight = 1,
+              opacity = 0.5)
+```
+
+
+### Census Tracts
+
+Hover on any tract to see its number.
+
+```{r}
+wash_co_census_tracts <- tracts(
+  state = "OR",
+  county = "Washington"
+) %>% 
+  clean_names() %>% 
+  st_transform(crs = 4326) 
+```
+
+```{r, layout="l-page"}
+leaflet() %>%
+  addProviderTiles(providers$CartoDB.Positron) %>%
+  addPolygons(data = wash_co_census_tracts,
+              label = wash_co_census_tracts$geoid,
+              fillColor = color_census_tracts,
+              color = color_census_tracts,
+              weight = 1,
+              opacity = 0.5)
+```
+
+
+### ZCTAs
+
+```{r}
+# http://www.ciclt.net/sn/clt/capitolimpact/gw_ziplist.aspx?FIPS=41067
+
+wash_co_zips <- tibble::tribble(
+  ~Zip.Code,          ~City,             ~County,
+  97005,    "Beaverton", "Washington County",
+  97006,    "Beaverton", "Washington County",
+  97006,        "Aloha", "Washington County",
+  97007,    "Beaverton", "Washington County",
+  97007,        "Aloha", "Washington County",
+  97008,    "Beaverton", "Washington County",
+  97062,     "Tualatin", "Washington County",
+  97075,    "Beaverton", "Washington County",
+  97076,    "Beaverton", "Washington County",
+  97106,        "Banks", "Washington County",
+  97109,        "Banks", "Washington County",
+  97109,       "Buxton", "Washington County",
+  97113,    "Cornelius", "Washington County",
+  97116,     "Glenwood", "Washington County",
+  97116, "Forest Grove", "Washington County",
+  97117,  "Gales Creek", "Washington County",
+  97119,       "Gaston", "Washington County",
+  97123,    "Hillsboro", "Washington County",
+  97124,    "Hillsboro", "Washington County",
+  97125,        "Banks", "Washington County",
+  97125,      "Manning", "Washington County",
+  97133, "North Plains", "Washington County",
+  97140,     "Sherwood", "Washington County",
+  97144,       "Timber", "Washington County",
+  97223,     "Portland", "Washington County",
+  97223,       "Tigard", "Washington County",
+  97224,     "Portland", "Washington County",
+  97224,       "Tigard", "Washington County",
+  97225,     "Portland", "Washington County",
+  97229,     "Portland", "Washington County",
+  97281,     "Portland", "Washington County",
+  97281,       "Tigard", "Washington County",
+  97291,     "Portland", "Washington County",
+  97298,     "Portland", "Washington County"
+) %>% 
+  pull(Zip.Code)
+
+
+
+wash_co_zctas <- zctas(state = "OR") %>% 
+  clean_names() %>% 
+  filter(zcta5ce10 %in% wash_co_zips)
+
+# Left earlier attempt code in
+
+# wash_co_boundaries <- counties(state = "OR") %>% 
+#   clean_names() %>% 
+#   filter(name == "Washington")
+
+# wash_co_zctas <- zctas(state = "OR") %>% 
+#   clean_names() %>% 
+#   st_intersection(wash_co_boundaries) %>% 
+#   st_transform(crs = 4326) %>% 
+#   st_cast("MULTILINESTRING")
+
+```
+
+This map shows all ZCTAs that have at least some portion in Washington County. Hover on any ZCTA to see what it is.
+
+```{r, layout="l-page"}
+leaflet() %>%
+  addProviderTiles(providers$CartoDB.Positron) %>%
+  addPolygons(data = wash_co_zctas,
+              label = wash_co_zctas$zcta5ce10,
+              fillColor = color_zctas,
+              color = color_zctas,
+              weight = 1,
+              opacity = 0.5)
+```
+
+
+### All Layers Combined
+
+Use the options in the top right to show/hide layers. 
+
+```{r, layout="l-page"}
+leaflet() %>%
+  addProviderTiles(providers$CartoDB.Positron) %>%
+  addPolygons(data = wash_co_school_catchment_areas,
+              label = wash_co_school_catchment_areas$grade_1_name_1,
+              fillColor = color_school_catchment_areas,
+              color = color_school_catchment_areas,
+              group = "School Catchment Areas",
+              weight = 1,
+              opacity = 0.5) %>% 
+  addPolygons(data = wash_co_census_tracts,
+              label = wash_co_census_tracts$geoid,
+              fillColor = color_census_tracts,
+              color = color_census_tracts,
+              group = "Census Tracts",
+              weight = 1,
+              opacity = 0.5) %>% 
+  addPolygons(data = wash_co_zctas,
+              label = wash_co_zctas$zcta5ce10,
+              fillColor = color_zctas,
+              color = color_zctas,
+              group = "ZCTAs",
+              weight = 1,
+              opacity = 0.5) %>% 
+  addLayersControl(
+    overlayGroups = c("School Catchment Areas",
+                      "Census Tracts",
+                      "ZCTAs"),
+    options = layersControlOptions(collapsed = FALSE))
+
+
+```
+
+## Table
+
+I can work on making a table that looks like this.
+
+![](https://d2ddoduugvun08.cloudfront.net/items/2A2O3q1c2x2l2r2v1p0h/Image%202019-10-29%20at%2012.00.13%20PM.png?X-CloudApp-Visitor-Id=2914590&v=01ee9f64)
+
+It's proving a bit more complicated than I originally thought it would. I can likely do it, just not by Wednesday.
+
+```{r}
+master_table <- wash_co_census_tracts %>% 
+  left_join(children_in_poverty)
+```
+
